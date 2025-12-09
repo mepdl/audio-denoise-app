@@ -11,16 +11,61 @@ import streamlit as st
 # ----------------- FUNÇÕES DE PROCESSAMENTO ----------------- #
 
 
-def remove_silence_edges(y: np.ndarray, top_db: float = 30.0) -> np.ndarray:
+def remove_silence_segments(
+    y: np.ndarray,
+    sr: int,
+    top_db: float = 30.0,
+    max_silence_sec: float = 0.3,
+    min_segment_sec: float = 0.1,
+) -> np.ndarray:
     """
-    Remove silêncio do início e do fim do áudio usando librosa.effects.trim.
+    Remove (quase) todos os silêncios do áudio usando librosa.effects.split.
+
+    - top_db: sensibilidade do que é considerado "som" vs "silêncio".
+      Quanto MENOR, mais agressivo (remove mais coisa).
+    - max_silence_sec: quanto de pausa máxima manter entre frases (segundos).
+    - min_segment_sec: descarta trechos muito curtos (ruídos, clicks).
     """
-    yt, idx = librosa.effects.trim(y, top_db=top_db)
+    # intervals: lista de [inicio, fim] em amostras, onde o sinal está "acima" de top_db
+    intervals = librosa.effects.split(y, top_db=top_db)
+
+    if len(intervals) == 0:
+        st.write(
+            "⚠️ Não foi possível detectar segmentos acima do nível de ruído. "
+            "Mantendo o áudio original."
+        )
+        return y
+
+    segments = []
+    gap_samples = int(max_silence_sec * sr) if max_silence_sec > 0 else 0
+    gap = np.zeros(gap_samples, dtype=y.dtype) if gap_samples > 0 else None
+
+    for i, (start, end) in enumerate(intervals):
+        dur = (end - start) / sr
+        if dur < min_segment_sec:
+            # trecho muito curto, provavelmente ruído → ignora
+            continue
+
+        segment = y[start:end]
+        segments.append(segment)
+
+        # adiciona silêncio curto entre trechos para não ficar "robô"
+        if gap is not None and i < len(intervals) - 1:
+            segments.append(gap)
+
+    if not segments:
+        st.write(
+            "⚠️ Todos os segmentos detectados eram muito curtos. "
+            "Mantendo o áudio original."
+        )
+        return y
+
+    y_out = np.concatenate(segments)
     st.write(
-        f"Silêncio removido nas bordas. Amostras originais: {len(y)}, "
-        f"após corte: {len(yt)} (índices {idx[0]}:{idx[1]})."
+        f"Silêncio removido em todo o áudio. "
+        f"Original: {len(y) / sr:.2f}s → Novo: {len(y_out) / sr:.2f}s"
     )
-    return yt
+    return y_out
 
 
 def denoise_array(
@@ -30,10 +75,14 @@ def denoise_array(
     prop_decrease: float = 0.8,
     trim_silence: bool = True,
     trim_top_db: float = 30.0,
+    max_silence_sec: float = 0.3,
+    min_segment_sec: float = 0.1,
 ) -> np.ndarray:
     """
-    Processa um array de áudio: remove ruído e, opcionalmente, silêncio das bordas.
+    Processa um array de áudio: remove ruído e, opcionalmente,
+    remove silêncios ao longo de todo o áudio.
     """
+    # Definir trecho inicial usado como amostra de ruído
     n_noise_samples = int(noise_duration * sr)
     if n_noise_samples >= len(y):
         n_noise_samples = max(1, int(0.2 * len(y)))
@@ -53,9 +102,16 @@ def denoise_array(
     )
 
     if trim_silence:
-        st.write("Removendo espaços vazios (silêncio) do início/fim...")
-        reduced_noise = remove_silence_edges(reduced_noise, top_db=trim_top_db)
+        st.write("Removendo espaços vazios (silêncio) em todo o áudio...")
+        reduced_noise = remove_silence_segments(
+            reduced_noise,
+            sr,
+            top_db=trim_top_db,
+            max_silence_sec=max_silence_sec,
+            min_segment_sec=min_segment_sec,
+        )
 
+    # Normalizar para evitar clipping
     max_abs = float(np.max(np.abs(reduced_noise)))
     if max_abs > 1e-9:
         reduced_noise = reduced_noise / max_abs
@@ -72,10 +128,11 @@ st.set_page_config(
     layout="centered",
 )
 
-st.title("🧼 Removedor de Ruído + Cortador de Silêncio")
+st.title("🧼 Removedor de Ruído + Cortador de Silêncio (Agressivo)")
 st.write(
     "Envie um arquivo de áudio. O app vai **remover ruído de fundo** "
-    "e, opcionalmente, **cortar espaços vazios do início e do fim**."
+    "e **cortar espaços vazios ao longo do áudio**, mantendo apenas "
+    "pausas curtas entre as falas."
 )
 
 uploaded_file = st.file_uploader(
@@ -103,7 +160,7 @@ prop_decrease = st.slider(
 )
 
 trim_silence = st.checkbox(
-    "Remover espaços vazios (silêncio) do início/fim do áudio",
+    "Remover espaços vazios (silêncio) ao longo do áudio",
     value=True,
     key="checkbox_trim_silence",
 )
@@ -115,6 +172,24 @@ trim_top_db = st.slider(
     value=30,
     step=2,
     key="slider_trim_top_db",
+)
+
+max_silence_sec = st.slider(
+    "Pausa máxima entre trechos (segundos)",
+    min_value=0.0,
+    max_value=1.0,
+    value=0.3,
+    step=0.05,
+    key="slider_max_silence_sec",
+)
+
+min_segment_sec = st.slider(
+    "Duração mínima de um trecho mantido (segundos)",
+    min_value=0.05,
+    max_value=0.5,
+    value=0.1,
+    step=0.05,
+    key="slider_min_segment_sec",
 )
 
 st.markdown("---")
@@ -131,7 +206,7 @@ if uploaded_file is not None:
         st.audio(audio_bytes)
 
         if st.button(
-            "🚀 Processar áudio (remover ruído e espaços vazios)",
+            "🚀 Processar áudio (remover ruído e silêncio)",
             key="btn_processar",
         ):
             with st.spinner("Processando áudio..."):
@@ -155,6 +230,8 @@ if uploaded_file is not None:
                     prop_decrease=prop_decrease,
                     trim_silence=trim_silence,
                     trim_top_db=trim_top_db,
+                    max_silence_sec=max_silence_sec,
+                    min_segment_sec=min_segment_sec,
                 )
 
                 # Salvar em buffer em memória
