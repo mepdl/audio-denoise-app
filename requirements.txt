@@ -1,0 +1,5 @@
+streamlit
+librosa
+noisereduce
+soundfile
+numpy
