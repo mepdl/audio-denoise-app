@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 import io
 import tempfile
 
@@ -164,7 +163,7 @@ if uploaded_file is not None:
                 )
 else:
     st.info("Envie um arquivo de áudio para começar.")
-=======
+
 import streamlit as st
 import librosa
 import noisereduce as nr
@@ -245,4 +244,4 @@ if uploaded_file is not None:
                 file_name="audio_denoised.wav",
                 mime="audio/wav",
             )
->>>>>>> dc9aa0b33e2f37055e73869652c2da4a6901cefe
+
