@@ -8,6 +8,9 @@ import soundfile as sf
 import streamlit as st
 
 
+# ----------------- FUNÇÕES DE PROCESSAMENTO ----------------- #
+
+
 def remove_silence_edges(y: np.ndarray, top_db: float = 30.0) -> np.ndarray:
     """
     Remove silêncio do início e do fim do áudio usando librosa.effects.trim.
@@ -62,6 +65,7 @@ def denoise_array(
 
 # ----------------- INTERFACE STREAMLIT ----------------- #
 
+
 st.set_page_config(
     page_title="Removedor de Ruído e Silêncio",
     page_icon="🧼",
@@ -70,13 +74,14 @@ st.set_page_config(
 
 st.title("🧼 Removedor de Ruído + Cortador de Silêncio")
 st.write(
-    "Envie um arquivo de áudio, o app vai **remover ruído de fundo** "
+    "Envie um arquivo de áudio. O app vai **remover ruído de fundo** "
     "e, opcionalmente, **cortar espaços vazios do início e do fim**."
 )
 
 uploaded_file = st.file_uploader(
     "Envie um arquivo de áudio",
     type=["wav", "mp3", "ogg", "flac", "m4a"],
+    key="uploader_arquivo",
 )
 
 noise_duration = st.slider(
@@ -85,6 +90,7 @@ noise_duration = st.slider(
     max_value=3.0,
     value=0.5,
     step=0.1,
+    key="slider_noise_duration",
 )
 
 prop_decrease = st.slider(
@@ -93,11 +99,13 @@ prop_decrease = st.slider(
     max_value=1.0,
     value=0.8,
     step=0.05,
+    key="slider_prop_decrease",
 )
 
 trim_silence = st.checkbox(
     "Remover espaços vazios (silêncio) do início/fim do áudio",
     value=True,
+    key="checkbox_trim_silence",
 )
 
 trim_top_db = st.slider(
@@ -106,22 +114,26 @@ trim_top_db = st.slider(
     max_value=60,
     value=30,
     step=2,
+    key="slider_trim_top_db",
 )
 
 st.markdown("---")
 
 if uploaded_file is not None:
     # Limite de tamanho opcional (ex.: 20 MB)
-    if uploaded_file.size > 50 * 1024 * 1024:
+    if uploaded_file.size > 20 * 1024 * 1024:
         st.error("Arquivo muito grande. Envie um áudio de até 20 MB.")
     else:
-        # Ler bytes uma única vez (para evitar problemas de ponteiro)
+        # Ler bytes uma única vez
         audio_bytes = uploaded_file.read()
 
         st.subheader("Áudio original")
         st.audio(audio_bytes)
 
-        if st.button("🚀 Processar áudio (remover ruído e espaços vazios)"):
+        if st.button(
+            "🚀 Processar áudio (remover ruído e espaços vazios)",
+            key="btn_processar",
+        ):
             with st.spinner("Processando áudio..."):
 
                 # Salvar temporariamente para o librosa ler
@@ -160,88 +172,7 @@ if uploaded_file is not None:
                     data=buf,
                     file_name="audio_denoised_trimmed.wav",
                     mime="audio/wav",
+                    key="btn_download",
                 )
 else:
     st.info("Envie um arquivo de áudio para começar.")
-
-import streamlit as st
-import librosa
-import noisereduce as nr
-import soundfile as sf
-import numpy as np
-import io
-import tempfile
-
-
-def denoise_array(y, sr, noise_duration=0.5, prop_decrease=0.8):
-    n_noise_samples = int(noise_duration * sr)
-    if n_noise_samples >= len(y):
-        n_noise_samples = max(1, int(0.2 * len(y)))
-
-    noise_clip = y[:n_noise_samples]
-
-    reduced_noise = nr.reduce_noise(
-        y=y,
-        y_noise=noise_clip,
-        sr=sr,
-        prop_decrease=prop_decrease,
-    )
-
-    max_abs = np.max(np.abs(reduced_noise))
-    if max_abs > 1:
-        reduced_noise = reduced_noise / max_abs
-
-    return reduced_noise
-
-
-st.title("🧼 Removedor de Ruído de Áudio (noisereduce + librosa)")
-
-uploaded_file = st.file_uploader("Envie um arquivo de áudio", type=["wav", "mp3", "ogg", "flac"])
-
-noise_duration = st.slider(
-    "Duração do trecho inicial considerado ruído (segundos)",
-    min_value=0.1,
-    max_value=3.0,
-    value=0.5,
-    step=0.1,
-)
-
-prop_decrease = st.slider(
-    "Intensidade da redução de ruído",
-    min_value=0.1,
-    max_value=1.0,
-    value=0.8,
-    step=0.05,
-)
-
-if uploaded_file is not None:
-    st.audio(uploaded_file, format="audio/wav")
-    if st.button("Remover ruído"):
-        with st.spinner("Processando áudio..."):
-            # Salvar temporariamente para ler com librosa
-            with tempfile.NamedTemporaryFile(delete=False, suffix=uploaded_file.name) as tmp:
-                tmp.write(uploaded_file.read())
-                temp_path = tmp.name
-
-            y, sr = librosa.load(temp_path, sr=None, mono=True)
-            reduced = denoise_array(
-                y,
-                sr,
-                noise_duration=noise_duration,
-                prop_decrease=prop_decrease,
-            )
-
-            # Salvar em buffer
-            buf = io.BytesIO()
-            sf.write(buf, reduced, sr, format="WAV")
-            buf.seek(0)
-
-            st.success("Áudio processado com sucesso!")
-            st.audio(buf, format="audio/wav")
-            st.download_button(
-                label="⬇️ Baixar áudio sem ruído",
-                data=buf,
-                file_name="audio_denoised.wav",
-                mime="audio/wav",
-            )
-
