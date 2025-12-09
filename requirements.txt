@@ -1,8 +1,6 @@
-streamlit==1.39.0
-librosa==0.10.2.post1
-noisereduce==3.0.3
-numpy==1.26.4
-soundfile==0.12.1
-scipy==1.11.4
-numba==0.58.1
-llvmlite==0.41.1
+streamlit
+librosa
+noisereduce
+soundfile
+numpy
+scipy
