@@ -2,12 +2,12 @@ import io
 import os
 import tempfile
 
+import av
 import librosa
 import noisereduce as nr
 import numpy as np
 import soundfile as sf
 import streamlit as st
-from moviepy.editor import VideoFileClip
 
 
 # ----------------- FUNÇÕES DE PROCESSAMENTO ----------------- #
@@ -120,31 +120,49 @@ def denoise_array(
     return reduced_noise
 
 
-def extract_audio_from_video(video_path: str) -> str:
+def extract_audio_with_av(video_path: str) -> tuple[np.ndarray, int]:
     """
-    Extrai o áudio de um arquivo de vídeo para um .wav temporário
-    e retorna o caminho desse .wav.
+    Extrai o áudio de um vídeo usando PyAV.
+    Retorna:
+      - y: numpy array do áudio em float32 (-1..1)
+      - sr: sample rate
     """
-    st.write("Extraindo áudio do vídeo...")
-    clip = VideoFileClip(video_path)
-    audio = clip.audio
+    st.write("Extraindo áudio do vídeo com PyAV...")
 
-    if audio is None:
+    container = av.open(video_path)
+    audio_stream = next((s for s in container.streams if s.type == "audio"), None)
+
+    if audio_stream is None:
+        container.close()
         raise ValueError("O vídeo não possui trilha de áudio.")
 
-    tmp_audio = tempfile.NamedTemporaryFile(
-        delete=False,
-        suffix=".wav",
+    resampler = av.audio.resampler.AudioResampler(
+        format="s16",
+        layout="mono",
+        rate=audio_stream.rate,
     )
-    tmp_audio_path = tmp_audio.name
-    tmp_audio.close()
 
-    # write_audiofile salva o áudio em wav
-    audio.write_audiofile(tmp_audio_path, logger=None)
-    clip.close()
+    audio_frames = []
 
-    st.write("Áudio extraído com sucesso.")
-    return tmp_audio_path
+    for packet in container.demux(audio_stream):
+        for frame in packet.decode():
+            frame = resampler.resample(frame)
+            audio_frames.append(frame.to_ndarray().flatten())
+
+    container.close()
+
+    if len(audio_frames) == 0:
+        raise ValueError("Não foi possível decodificar o áudio do vídeo.")
+
+    y_int16 = np.concatenate(audio_frames).astype(np.int16)
+    y = y_int16.astype(np.float32) / np.iinfo(np.int16).max  # -1..1
+    sr = audio_stream.rate
+
+    st.write(
+        f"Áudio extraído do vídeo. Duração aproximada: {len(y) / sr:.2f} segundos."
+    )
+
+    return y, sr
 
 
 def is_video_file(filename: str) -> bool:
@@ -241,14 +259,14 @@ min_segment_sec = st.slider(
 st.markdown("---")
 
 if uploaded_file is not None:
-    # Limite de tamanho opcional (ex.: 100 MB pra vídeo)
+    # Limite de tamanho (ex.: 100 MB pra vídeo)
     if uploaded_file.size > 100 * 1024 * 1024:
         st.error("Arquivo muito grande. Envie um arquivo de até 100 MB.")
     else:
         # Ler bytes uma única vez
         file_bytes = uploaded_file.read()
 
-        # Tipo de preview: se for áudio, usamos st.audio; se for vídeo, st.video.
+        # Preview: vídeo ou áudio
         ext = os.path.splitext(uploaded_file.name.lower())[1]
         st.subheader("Pré-visualização do arquivo enviado")
         if is_video_file(uploaded_file.name):
@@ -270,14 +288,11 @@ if uploaded_file is not None:
                     tmp.write(file_bytes)
                     temp_path = tmp.name
 
-                # Se for vídeo → extrai áudio para wav temporário
+                # Carregar áudio dependendo do tipo
                 if is_video_file(uploaded_file.name):
-                    audio_path = extract_audio_from_video(temp_path)
+                    y, sr = extract_audio_with_av(temp_path)
                 else:
-                    audio_path = temp_path
-
-                # Carregar áudio com librosa
-                y, sr = librosa.load(audio_path, sr=None, mono=True)
+                    y, sr = librosa.load(temp_path, sr=None, mono=True)
 
                 # Processar (ruído + silêncio)
                 reduced = denoise_array(
