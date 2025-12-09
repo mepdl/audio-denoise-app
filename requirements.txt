@@ -1,5 +1,13 @@
+<<<<<<< HEAD
 streamlit
 librosa
 noisereduce
 soundfile
 numpy
+=======
+streamlit
+librosa
+noisereduce
+soundfile
+numpy
+>>>>>>> dc9aa0b33e2f37055e73869652c2da4a6901cefe
