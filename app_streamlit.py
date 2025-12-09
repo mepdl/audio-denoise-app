@@ -1,8 +1,6 @@
 import io
-import os
 import tempfile
 
-import av
 import librosa
 import noisereduce as nr
 import numpy as np
@@ -25,9 +23,10 @@ def remove_silence_segments(
 
     - top_db: sensibilidade do que é considerado "som" vs "silêncio".
       Quanto MENOR, mais agressivo (remove mais coisa).
-    - max_silence_sec: pausa máxima mantida entre frases (segundos).
+    - max_silence_sec: quanto de pausa máxima manter entre frases (segundos).
     - min_segment_sec: descarta trechos muito curtos (ruídos, clicks).
     """
+    # intervals: lista de [inicio, fim] em amostras, onde o sinal está "acima" de top_db
     intervals = librosa.effects.split(y, top_db=top_db)
 
     if len(intervals) == 0:
@@ -120,56 +119,6 @@ def denoise_array(
     return reduced_noise
 
 
-def extract_audio_with_av(video_path: str) -> tuple[np.ndarray, int]:
-    """
-    Extrai o áudio de um vídeo usando PyAV.
-    Retorna:
-      - y: numpy array do áudio em float32 (-1..1)
-      - sr: sample rate
-    """
-    st.write("Extraindo áudio do vídeo com PyAV...")
-
-    container = av.open(video_path)
-    audio_stream = next((s for s in container.streams if s.type == "audio"), None)
-
-    if audio_stream is None:
-        container.close()
-        raise ValueError("O vídeo não possui trilha de áudio.")
-
-    resampler = av.audio.resampler.AudioResampler(
-        format="s16",
-        layout="mono",
-        rate=audio_stream.rate,
-    )
-
-    audio_frames = []
-
-    for packet in container.demux(audio_stream):
-        for frame in packet.decode():
-            frame = resampler.resample(frame)
-            audio_frames.append(frame.to_ndarray().flatten())
-
-    container.close()
-
-    if len(audio_frames) == 0:
-        raise ValueError("Não foi possível decodificar o áudio do vídeo.")
-
-    y_int16 = np.concatenate(audio_frames).astype(np.int16)
-    y = y_int16.astype(np.float32) / np.iinfo(np.int16).max  # -1..1
-    sr = audio_stream.rate
-
-    st.write(
-        f"Áudio extraído do vídeo. Duração aproximada: {len(y) / sr:.2f} segundos."
-    )
-
-    return y, sr
-
-
-def is_video_file(filename: str) -> bool:
-    ext = os.path.splitext(filename.lower())[1]
-    return ext in [".mp4", ".mov", ".mkv", ".avi", ".wmv", ".flv", ".webm"]
-
-
 # ----------------- INTERFACE STREAMLIT ----------------- #
 
 
@@ -179,29 +128,16 @@ st.set_page_config(
     layout="centered",
 )
 
-st.title("🧼 Removedor de Ruído + Cortador de Silêncio (Áudio e Vídeo)")
+st.title("🧼 Removedor de Ruído + Cortador de Silêncio (Agressivo)")
 st.write(
-    "Envie um **áudio** ou **vídeo**. O app vai extrair o **áudio**, "
-    "remover ruído de fundo e cortar espaços vazios ao longo do áudio, "
-    "mantendo apenas pausas curtas entre as falas."
+    "Envie um arquivo de áudio. O app vai **remover ruído de fundo** "
+    "e **cortar espaços vazios ao longo do áudio**, mantendo apenas "
+    "pausas curtas entre as falas."
 )
 
 uploaded_file = st.file_uploader(
-    "Envie um arquivo de áudio ou vídeo",
-    type=[
-        "wav",
-        "mp3",
-        "ogg",
-        "flac",
-        "m4a",
-        "mp4",
-        "mov",
-        "mkv",
-        "avi",
-        "wmv",
-        "flv",
-        "webm",
-    ],
+    "Envie um arquivo de áudio",
+    type=["wav", "mp3", "ogg", "flac", "m4a"],
     key="uploader_arquivo",
 )
 
@@ -259,40 +195,32 @@ min_segment_sec = st.slider(
 st.markdown("---")
 
 if uploaded_file is not None:
-    # Limite de tamanho (ex.: 100 MB pra vídeo)
-    if uploaded_file.size > 100 * 1024 * 1024:
-        st.error("Arquivo muito grande. Envie um arquivo de até 100 MB.")
+    # Limite de tamanho opcional (ex.: 20 MB)
+    if uploaded_file.size > 20 * 1024 * 1024:
+        st.error("Arquivo muito grande. Envie um áudio de até 20 MB.")
     else:
         # Ler bytes uma única vez
-        file_bytes = uploaded_file.read()
+        audio_bytes = uploaded_file.read()
 
-        # Preview: vídeo ou áudio
-        ext = os.path.splitext(uploaded_file.name.lower())[1]
-        st.subheader("Pré-visualização do arquivo enviado")
-        if is_video_file(uploaded_file.name):
-            st.video(file_bytes)
-        else:
-            st.audio(file_bytes)
+        st.subheader("Áudio original")
+        st.audio(audio_bytes)
 
         if st.button(
-            "🚀 Processar (extrair áudio, remover ruído e silêncio)",
+            "🚀 Processar áudio (remover ruído e silêncio)",
             key="btn_processar",
         ):
             with st.spinner("Processando áudio..."):
 
-                # Salvar o upload em arquivo temporário
+                # Salvar temporariamente para o librosa ler
                 with tempfile.NamedTemporaryFile(
                     delete=False,
                     suffix=f"_{uploaded_file.name}",
                 ) as tmp:
-                    tmp.write(file_bytes)
+                    tmp.write(audio_bytes)
                     temp_path = tmp.name
 
-                # Carregar áudio dependendo do tipo
-                if is_video_file(uploaded_file.name):
-                    y, sr = extract_audio_with_av(temp_path)
-                else:
-                    y, sr = librosa.load(temp_path, sr=None, mono=True)
+                # Carregar áudio com librosa
+                y, sr = librosa.load(temp_path, sr=None, mono=True)
 
                 # Processar (ruído + silêncio)
                 reduced = denoise_array(
@@ -306,22 +234,22 @@ if uploaded_file is not None:
                     min_segment_sec=min_segment_sec,
                 )
 
-                # Salvar em buffer em memória (WAV)
+                # Salvar em buffer em memória
                 buf = io.BytesIO()
                 sf.write(buf, reduced, sr, format="WAV")
                 buf.seek(0)
 
                 st.success("Áudio processado com sucesso!")
 
-                st.subheader("Áudio processado (somente áudio)")
+                st.subheader("Áudio processado")
                 st.audio(buf, format="audio/wav")
 
                 st.download_button(
-                    label="⬇️ Baixar áudio processado (WAV)",
+                    label="⬇️ Baixar áudio processado",
                     data=buf,
                     file_name="audio_denoised_trimmed.wav",
                     mime="audio/wav",
                     key="btn_download",
                 )
 else:
-    st.info("Envie um arquivo de áudio ou vídeo para começar.")
+    st.info("Envie um arquivo de áudio para começar.")
