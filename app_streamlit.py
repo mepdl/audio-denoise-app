@@ -112,7 +112,7 @@ st.markdown("---")
 
 if uploaded_file is not None:
     # Limite de tamanho opcional (ex.: 20 MB)
-    if uploaded_file.size > 20 * 1024 * 1024:
+    if uploaded_file.size > 50 * 1024 * 1024:
         st.error("Arquivo muito grande. Envie um áudio de até 20 MB.")
     else:
         # Ler bytes uma única vez (para evitar problemas de ponteiro)
