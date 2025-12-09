@@ -4,4 +4,4 @@ noisereduce
 soundfile
 numpy
 scipy
-moviepy
+av
